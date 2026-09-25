@@ -1,0 +1,31 @@
+# Virtual Environment
+venv
+venv/
+venv/**
+.venv
+.venv/
+.venv/**
+env
+env/
+
+# Bytecode & Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints
+.ipynb_checkpoints/
+
+# Output & Data
+output/
+output/**
+dataset/
+dataset/**
+
+# Extracted resources & OS metadata
+6ab10eb3b23ba_student_resource/
+6ab10eb3b23ba_student_resource/**
+__MACOSX/
+__MACOSX/**
+.DS_Store
+Thumbs.db
