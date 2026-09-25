@@ -19,10 +19,11 @@ from src.features import FEATURE_NAMES, pair_features, label_pair
 from src.evaluate import macro_f05
 from src.failure_analysis import input_manifest
 from src.ranking import peak_memory_mib
+from src.phase3d import derive
 
 TRAIN = Path("dataset/train")
 OUT = Path("output/frozen_holdout")
-K, THRESHOLD, SEED = 50, .670, 42
+K, THRESHOLD, SEED = 50, .680, 42
 
 
 def fresh_queries():
@@ -70,9 +71,16 @@ def build_pairs(queries, pool, truth, frequencies):
 
 def evaluate(rows, queries, truth, model_bundle):
     names = model_bundle["feature_names"]
-    if names != [n for n in FEATURE_NAMES if n in names]:
-        raise ValueError("Saved model feature schema is invalid")
-    x = np.asarray([[features[n] for n in names] for _, _, _, _, features in rows], dtype=np.float32)
+    base_names = list(FEATURE_NAMES)
+    base = np.asarray([[features[n] for n in base_names] for _, _, _, _, features in rows], dtype=np.float32)
+    if any(n not in base_names for n in names):
+        derived, derived_names = derive(base, base_names)
+        available = base_names + derived_names
+        if any(n not in available for n in names):
+            raise ValueError("Saved model feature schema is incompatible")
+        x = derived[:, [available.index(n) for n in names]]
+    else:
+        x = base[:, [base_names.index(n) for n in names]]
     labels = np.asarray([label for _, _, _, label, _ in rows], dtype=np.uint8)
     probabilities = model_bundle["model"].predict_proba(x)[:, 1]
     predictions = {q.entity_id: set() for q in queries}
@@ -129,9 +137,9 @@ def main():
         pool.extend(selected)
     frequencies = load_frequencies(Path("output/pair_features/training_frequencies.jsonl.gz"))
     rows = build_pairs(queries, pool, truth, frequencies)
-    bundle = joblib.load(OUT.parent / "baseline_models" / "hist_gradient_boosting.joblib")
-    if bundle["threshold"] != THRESHOLD or bundle["feature_names"] != json.loads(Path("output/pair_features/schema.json").read_text())["feature_columns"][:0] + bundle["feature_names"]:
-        raise ValueError("Frozen model metadata does not match required threshold/schema")
+    bundle = joblib.load(OUT.parent / "phase3d" / "selected_validation_model.joblib")
+    if bundle["threshold"] != THRESHOLD:
+        raise ValueError("Frozen model threshold does not match required threshold")
     metrics, predictions, probabilities = evaluate(rows, queries, truth, bundle)
     # Compact examples: strongest false positives/true positives and missed links.
     indexed = list(zip(rows, probabilities)); examples = []
@@ -169,6 +177,7 @@ def main():
       "pool_stats": pool_stats, "metrics": metrics, "country_breakdown": country_metrics,
       "examples": examples, "runtime_seconds": time.perf_counter() - started, "peak_memory_mib": peak_memory_mib(),
       "threshold_frozen": THRESHOLD, "k_frozen": K, "feature_names": bundle["feature_names"],
+      "configuration": "Phase 3D interaction_features: five generic derived interactions; HGB retrained on Phase 3A training pairs; validation-selected threshold 0.680",
       "original_tsv_metadata_unchanged": input_manifest(TRAIN) == manifest,
       "comparison": {"validation_macro_f05": .9820252551563291, "holdout_macro_f05": metrics["macro_f05"],
                       "difference": metrics["macro_f05"] - .9820252551563291}}
