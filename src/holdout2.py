@@ -1,4 +1,7 @@
-"""Holdout 2: frozen baseline vs frozen LightGBM, complete S2/S3 catalogs."""
+"""Holdout 2 entry point; reference helpers retained for bounded comparisons."""
+import os
+for _name in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS'):
+ os.environ[_name]='4'
 import csv, json, time
 from itertools import islice
 from pathlib import Path
@@ -18,8 +21,7 @@ def queries():
 def prior():
  ids=set()
  with Path('output/pair_features/s1_split.csv').open(encoding='utf-8') as f: ids.update(r['source1_entity_id'] for r in csv.DictReader(f))
- for r in islice(read_rows(TRAIN/'train_source1.tsv'),40000): ids.add(r['entity_id'])
- for r in islice(read_rows(TRAIN/'train_source1.tsv'),20000,40000): ids.add(r['entity_id'])
+ for r in islice(read_rows(TRAIN/'train_source1.tsv'),60000): ids.add(r['entity_id'])
  return ids
 def full_catalog(source):
  return [Record.from_row(r) for r in read_rows(TRAIN/f'train_source{source}.tsv')]
@@ -47,15 +49,10 @@ def metrics(rows,qs,truth,bundle,threshold):
   t={s:{i for i in truth[s] if i.startswith(src+'-')} for s in truth}; pr={s:{i for i in pred[s] if i.startswith(src+'-')} for s in truth}; total=sum(map(len,t.values())); by[src]={'true_links':total,'macro_f05':macro_f05(t,pr),'full_ground_truth_link_recall':sum(len(pr[s]&t[s]) for s in t)/max(1,total),'candidate_recall':sum(1 for r in rows if r[2] and r[1].startswith(src+'-'))/max(1,total)}
  m['by_source']=by; return m
 def main():
- st=time.perf_counter(); manifest=input_manifest(TRAIN); qs=queries(); old=prior(); ids={q.entity_id for q in qs}
- if old&ids: raise ValueError('Holdout 2 overlaps earlier S1 entities')
- truth=load_truth(TRAIN/'train_ground_truth.tsv',ids); print('Loading complete catalogs',flush=True); pool=[]
- for src in (2,3):
-  data=full_catalog(src); print(f'S{src}: {len(data):,}',flush=True); pool.extend(data)
- freq=load_frequencies(Path('output/pair_features/training_frequencies.jsonl.gz')); rows=pairs(qs,pool,truth,freq)
- bundles={'hist_gradient_boosting':(joblib.load(Path('output/baseline_models/hist_gradient_boosting.joblib')),0.670),'lightgbm':(joblib.load(Path('output/phase4a/lightgbm.joblib')),0.585)}
- report={'s1_count':len(qs),'overlap_count':len(old&ids),'previous_ids':len(old),'complete_catalog_records':len(pool),'k':K,'models':{}}
- for name,(b,t) in bundles.items(): report['models'][name]=metrics(rows,qs,truth,b,t); print(name,json.dumps(report['models'][name]),flush=True)
- report['runtime_seconds']=time.perf_counter()-st; report['peak_memory_mib']=peak_memory_mib(); report['original_tsv_metadata_unchanged']=input_manifest(TRAIN)==manifest; report['selection']='LightGBM frozen from Phase 4A validation only; no Holdout 2 tuning'
- OUT.mkdir(parents=True,exist_ok=True); (OUT/'report.json').write_text(json.dumps(report,indent=2)); (OUT/'summary.md').write_text('# Holdout 2 frozen comparison\n\n'+json.dumps(report,indent=2))
+ from src.scalable_holdout2 import run, OUT as scalable_output
+ from src.resource_guard import watchdog
+ from threadpoolctl import threadpool_limits
+ scalable_output.mkdir(parents=True,exist_ok=True)
+ watchdog(scalable_output/'resource_stop.json')
+ with threadpool_limits(limits=4): run()
 if __name__=='__main__': main()
